@@ -2,33 +2,19 @@
 //  LauncherPanel.swift
 //  Pulse
 //
-//  Created by Pratik Bhavarthe on 08/02/26.
+//  Created by Pratik Bhavarthe on 09/02/26.
 //
 
 import AppKit
 
 class LauncherPanel: NSPanel {
-
-    init() {
-        let screenRect = NSScreen.main?.frame ?? .zero
-        let width: CGFloat = 700
-        let height: CGFloat = 120
-
-        let rect = NSRect(
-            x: (screenRect.width - width) / 2,
-            y: screenRect.height * 0.66,
-            width: width,
-            height: height
-        )
-
+    override init(
+        contentRect: NSRect, styleMask style: NSWindow.StyleMask,
+        backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool
+    ) {
         super.init(
-            contentRect: rect,
-            styleMask: [.titled, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
-        )
+            contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
 
-        // Launcher behavior
         self.isFloatingPanel = true
         self.level = .floating
         self.titleVisibility = .hidden
@@ -36,23 +22,23 @@ class LauncherPanel: NSPanel {
         self.isMovableByWindowBackground = true
         self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
-        // Important for keyboard events
         self.becomesKeyOnlyIfNeeded = true
         self.acceptsMouseMovedEvents = true
+
+        self.backgroundColor = .clear
+        self.isOpaque = false  // Essential for Liquid Glass / VisualEffectView
+        self.hasShadow = true
     }
 
-    // Allow panel to receive key events
-    override var canBecomeKey: Bool {
-        return true
-    }
+    override var canBecomeKey: Bool { return true }
+    override var canBecomeMain: Bool { return true }
 
-    override var canBecomeMain: Bool {
-        return true
-    }
-
-    // Forward key events to SwiftUI
     override func keyDown(with event: NSEvent) {
         NotificationCenter.default.post(name: .pulseKeyEvent, object: event)
         super.keyDown(with: event)
     }
+}
+
+extension NSNotification.Name {
+    static let pulseKeyEvent = NSNotification.Name("pulseKeyEvent")
 }

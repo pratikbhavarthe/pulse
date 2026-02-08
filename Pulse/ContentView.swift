@@ -2,102 +2,25 @@
 //  ContentView.swift
 //  Pulse
 //
-//  Created by Pratik Bhavarthe on 08/02/26.
+//  Created by Pratik Bhavarthe on 09/02/26.
 //
 
 import AppKit
-import Combine
 import SwiftUI
 
-struct ContentView: View {
+// MARK: - Visual Components
 
-    @ObservedObject var appSearch = AppSearch.shared
-    @State private var query: String = ""
-    @State private var selectedIndex: Int = 0
-
-    var filteredResults: [SearchResult] {
-        if query.isEmpty { return appSearch.apps }
-        return appSearch.apps.filter { $0.name.fuzzyMatch(query) }
+struct VisualEffectBlur: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        // 'hudWindow' gives a dark, high-contrast, translucent "liquid glass" look
+        // 'popover' or 'sidebar' can change the tint.
+        view.material = .hudWindow
+        view.blendingMode = .behindWindow
+        view.state = .active
+        return view
     }
-
-    var body: some View {
-        VStack(spacing: 12) {
-
-            PulseTextField(
-                text: $query,
-                placeholder: "Search applications…",
-                onUpArrow: {
-                    selectedIndex = max(selectedIndex - 1, 0)
-                },
-                onDownArrow: {
-                    selectedIndex = min(selectedIndex + 1, filteredResults.count - 1)
-                },
-                onEnter: {
-                    runSelectedCommand()
-                },
-                onEscape: {
-                    NSApp.keyWindow?.orderOut(nil)
-                }
-            )
-            .frame(height: 40)
-            .background(.ultraThinMaterial)
-            .cornerRadius(10)
-
-            if !filteredResults.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    // Limit to 6 results for now to fit in the window
-                    ForEach(0..<min(filteredResults.count, 6), id: \.self) { index in
-                        let result = filteredResults[index]
-                        HStack(spacing: 12) {
-                            Image(nsImage: result.icon)
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                                .frame(width: 24, height: 24)
-
-                            Text(result.name)
-                                .font(.system(size: 16))
-                                .foregroundColor(selectedIndex == index ? .white : .primary)
-
-                            Spacer()
-                        }
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 10)
-                        .background(
-                            selectedIndex == index ? Color.accentColor : Color.clear
-                        )
-                        .cornerRadius(6)
-                    }
-                }
-            } else if !query.isEmpty {
-                Text("No results found")
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding()
-            }
-        }
-        .padding(16)
-        .frame(width: 700)
-        .onAppear {
-            // Ensure window takes focus
-            NSApp.activate(ignoringOtherApps: true)
-        }
-        .onChange(of: query) {
-            selectedIndex = 0
-        }
-    }
-
-    func runSelectedCommand() {
-        guard selectedIndex < filteredResults.count else { return }
-        let result = filteredResults[selectedIndex]
-
-        let url = URL(fileURLWithPath: result.path)
-        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
-        { _, _ in
-            DispatchQueue.main.async {
-                NSApp.keyWindow?.orderOut(nil)
-            }
-        }
-    }
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
 
 struct PulseTextField: NSViewRepresentable {
@@ -164,83 +87,148 @@ struct PulseTextField: NSViewRepresentable {
     }
 }
 
-struct SearchResult: Identifiable, Hashable {
-    let id = UUID()
-    let name: String
-    let path: String
-    let icon: NSImage
+struct ContentView: View {
+    @ObservedObject var appSearch = AppSearch.shared
+    @State private var query: String = ""
+    @State private var selectedIndex: Int = 0
 
-    func hash(into hasher: inout Hasher) {
-        hasher.combine(path)
-    }
+    var filteredResults: [SearchResult] {
+        var results: [SearchResult] = []
 
-    static func == (lhs: SearchResult, rhs: SearchResult) -> Bool {
-        return lhs.path == rhs.path
-    }
-}
-
-class AppSearch: ObservableObject {
-    static let shared = AppSearch()
-
-    @Published var apps: [SearchResult] = []
-    private var isScanning = false
-
-    private init() {
-        scanApps()
-    }
-
-    func scanApps() {
-        guard !isScanning else { return }
-        isScanning = true
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            var foundApps: [SearchResult] = []
-
-            let directories = [
-                "/Applications",
-                "/System/Applications",
-                "/System/Library/CoreServices/Applications",
-                ("~" as NSString).expandingTildeInPath + "/Applications",
-            ]
-
-            let fileManager = FileManager.default
-            let workspace = NSWorkspace.shared
-
-            for dir in directories {
-                guard let contents = try? fileManager.contentsOfDirectory(atPath: dir) else {
-                    continue
-                }
-
-                for item in contents {
-                    if item.hasSuffix(".app") {
-                        let path = (dir as NSString).appendingPathComponent(item)
-                        let name = (item as NSString).deletingPathExtension
-                        let icon = workspace.icon(forFile: path)
-
-                        let result = SearchResult(name: name, path: path, icon: icon)
-                        foundApps.append(result)
+        // 1. Calculator 
+        if let calcResult = Calculator.evaluate(query) {
+            results.append(
+                SearchResult(
+                    name: "= \(calcResult)",
+                    path: calcResult,
+                    icon: NSImage(systemSymbolName: "function", accessibilityDescription: nil)
+                        ?? NSImage(),
+                    type: .calculator,
+                    action: {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(calcResult, forType: .string)
                     }
+                ))
+        }
+
+        // 2. System Commands
+        if !query.isEmpty {
+            let sys = SystemCommand.all.filter { $0.name.fuzzyMatch(query) }
+            let sysResults = sys.map { cmd in
+                SearchResult(
+                    name: cmd.name,
+                    path: "system",
+                    icon: NSImage(systemSymbolName: cmd.iconName, accessibilityDescription: nil)
+                        ?? NSImage(),
+                    type: .system,
+                    action: cmd.action
+                )
+            }
+            results.append(contentsOf: sysResults)
+        }
+
+        // 3. Apps
+        if query.isEmpty {
+            results.append(contentsOf: appSearch.apps)
+        } else {
+            results.append(contentsOf: appSearch.apps.filter { $0.name.fuzzyMatch(query) })
+        }
+
+        return results
+    }
+
+    var body: some View {
+        ZStack {
+            // Liquid Glass Background
+            VisualEffectBlur()
+                .edgesIgnoringSafeArea(.all)
+
+            VStack(spacing: 12) {
+                PulseTextField(
+                    text: $query,
+                    placeholder: "Search applications…",
+                    onUpArrow: {
+                        selectedIndex = max(selectedIndex - 1, 0)
+                    },
+                    onDownArrow: {
+                        selectedIndex = min(selectedIndex + 1, filteredResults.count - 1)
+                    },
+                    onEnter: {
+                        runSelectedCommand()
+                    },
+                    onEscape: {
+                        NSApp.keyWindow?.orderOut(nil)
+                    }
+                )
+                .frame(height: 40)
+                .padding(.horizontal, 10)
+                .background(Color.black.opacity(0.1))
+                .cornerRadius(10)
+
+                if !filteredResults.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(0..<min(filteredResults.count, 6), id: \.self) { index in
+                            let result = filteredResults[index]
+                            HStack(spacing: 12) {
+                                Image(nsImage: result.icon)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fit)
+                                    .frame(width: 24, height: 24)
+
+                                Text(result.name)
+                                    .font(.system(size: 16))
+                                    .foregroundColor(selectedIndex == index ? .white : .primary)
+
+                                Spacer()
+                            }
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 10)
+                            .background(
+                                selectedIndex == index ? Color.accentColor : Color.clear
+                            )
+                            .cornerRadius(6)
+                            .onTapGesture {
+                                selectedIndex = index
+                                runSelectedCommand()
+                            }
+                        }
+                    }
+                } else if !query.isEmpty {
+                    Text("No results found")
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding()
                 }
             }
-
-            DispatchQueue.main.async {
-                self?.apps = foundApps
-                self?.isScanning = false
-            }
+            .padding(16)
+        }
+        .frame(width: 700)
+        .cornerRadius(16)
+        .onAppear {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        .onChange(of: query) {
+            selectedIndex = 0
         }
     }
-}
 
-extension String {
-    func fuzzyMatch(_ query: String) -> Bool {
-        if query.isEmpty { return true }
-        var remainder = query[...]
-        for char in self {
-            if let first = remainder.first, char.lowercased() == String(first).lowercased() {
-                remainder.removeFirst()
-                if remainder.isEmpty { return true }
+    func runSelectedCommand() {
+        guard selectedIndex < filteredResults.count else { return }
+        let result = filteredResults[selectedIndex]
+
+        if let action = result.action {
+            action()
+            // Optional: Keep open or close. Standard launcher behavior is close.
+            NSApp.keyWindow?.orderOut(nil)
+        } else if result.type == .app {
+            let url = URL(fileURLWithPath: result.path)
+            NSWorkspace.shared.openApplication(
+                at: url, configuration: NSWorkspace.OpenConfiguration()
+            ) { _, _ in
+                DispatchQueue.main.async {
+                    NSApp.keyWindow?.orderOut(nil)
+                }
             }
         }
-        return false
     }
 }
