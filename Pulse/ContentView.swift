@@ -14,7 +14,6 @@ struct VisualEffectBlur: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
         // 'hudWindow' gives a dark, high-contrast, translucent "liquid glass" look
-        // 'popover' or 'sidebar' can change the tint.
         view.material = .hudWindow
         view.blendingMode = .behindWindow
         view.state = .active
@@ -88,58 +87,14 @@ struct PulseTextField: NSViewRepresentable {
 }
 
 struct ContentView: View {
-    @ObservedObject var appSearch = AppSearch.shared
+    @ObservedObject var orchestrator = SearchOrchestrator.shared
     @State private var query: String = ""
     @State private var selectedIndex: Int = 0
 
-    var filteredResults: [SearchResult] {
-        var results: [SearchResult] = []
-
-        // 1. Calculator 
-        if let calcResult = Calculator.evaluate(query) {
-            results.append(
-                SearchResult(
-                    name: "= \(calcResult)",
-                    path: calcResult,
-                    icon: NSImage(systemSymbolName: "function", accessibilityDescription: nil)
-                        ?? NSImage(),
-                    type: .calculator,
-                    action: {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(calcResult, forType: .string)
-                    }
-                ))
-        }
-
-        // 2. System Commands
-        if !query.isEmpty {
-            let sys = SystemCommand.all.filter { $0.name.fuzzyMatch(query) }
-            let sysResults = sys.map { cmd in
-                SearchResult(
-                    name: cmd.name,
-                    path: "system",
-                    icon: NSImage(systemSymbolName: cmd.iconName, accessibilityDescription: nil)
-                        ?? NSImage(),
-                    type: .system,
-                    action: cmd.action
-                )
-            }
-            results.append(contentsOf: sysResults)
-        }
-
-        // 3. Apps
-        if query.isEmpty {
-            results.append(contentsOf: appSearch.apps)
-        } else {
-            results.append(contentsOf: appSearch.apps.filter { $0.name.fuzzyMatch(query) })
-        }
-
-        return results
-    }
+    // We listen to changes but orchestrator manages results
 
     var body: some View {
         ZStack {
-            // Liquid Glass Background
             VisualEffectBlur()
                 .edgesIgnoringSafeArea(.all)
 
@@ -151,7 +106,7 @@ struct ContentView: View {
                         selectedIndex = max(selectedIndex - 1, 0)
                     },
                     onDownArrow: {
-                        selectedIndex = min(selectedIndex + 1, filteredResults.count - 1)
+                        selectedIndex = min(selectedIndex + 1, orchestrator.results.count - 1)
                     },
                     onEnter: {
                         runSelectedCommand()
@@ -165,10 +120,10 @@ struct ContentView: View {
                 .background(Color.black.opacity(0.1))
                 .cornerRadius(10)
 
-                if !filteredResults.isEmpty {
+                if !orchestrator.results.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
-                        ForEach(0..<min(filteredResults.count, 6), id: \.self) { index in
-                            let result = filteredResults[index]
+                        ForEach(0..<min(orchestrator.results.count, 6), id: \.self) { index in
+                            let result = orchestrator.results[index]
                             HStack(spacing: 12) {
                                 Image(nsImage: result.icon)
                                     .resizable()
@@ -208,27 +163,18 @@ struct ContentView: View {
             NSApp.activate(ignoringOtherApps: true)
         }
         .onChange(of: query) {
+            orchestrator.search(query: query)
             selectedIndex = 0
         }
     }
 
     func runSelectedCommand() {
-        guard selectedIndex < filteredResults.count else { return }
-        let result = filteredResults[selectedIndex]
+        guard selectedIndex < orchestrator.results.count else { return }
+        let result = orchestrator.results[selectedIndex]
 
-        if let action = result.action {
-            action()
-            // Optional: Keep open or close. Standard launcher behavior is close.
-            NSApp.keyWindow?.orderOut(nil)
-        } else if result.type == .app {
-            let url = URL(fileURLWithPath: result.path)
-            NSWorkspace.shared.openApplication(
-                at: url, configuration: NSWorkspace.OpenConfiguration()
-            ) { _, _ in
-                DispatchQueue.main.async {
-                    NSApp.keyWindow?.orderOut(nil)
-                }
-            }
-        }
+        // Execute via Protocol extension (which handles Logging)
+        result.run()
+
+        NSApp.keyWindow?.orderOut(nil)
     }
 }

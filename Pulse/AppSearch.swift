@@ -40,9 +40,15 @@ class AppSearch: ObservableObject {
                     if item.hasSuffix(".app") {
                         let path = (dir as NSString).appendingPathComponent(item)
                         let name = (item as NSString).deletingPathExtension
-                        // Note: icon(forFile:) is safe to call here, but drawing must be on main thread
                         let icon = workspace.icon(forFile: path)
-                        let result = SearchResult(name: name, path: path, icon: icon, type: .app)
+
+                        // Attempt to get Bundle Identifier for stable ID
+                        let bundle = Bundle(path: path)
+                        let stableId = bundle?.bundleIdentifier ?? path
+
+                        let result = SearchResult(
+                            name: name, path: path, icon: icon, type: ResultType.app,
+                            stableId: stableId)
                         foundApps.append(result)
                     }
                 }
