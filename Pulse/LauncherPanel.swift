@@ -39,6 +39,4 @@ class LauncherPanel: NSPanel {
     }
 }
 
-extension NSNotification.Name {
-    static let pulseKeyEvent = NSNotification.Name("pulseKeyEvent")
-}
+// End of file
