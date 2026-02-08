@@ -25,9 +25,13 @@ class AppSearch: ObservableObject {
             var foundApps: [SearchResult] = []
             let directories = [
                 "/Applications",
+                "/Applications/Utilities",
                 "/System/Applications",
+                "/System/Applications/Utilities",
+                "/System/Library/CoreServices",  // Finder is here
                 "/System/Library/CoreServices/Applications",
                 ("~" as NSString).expandingTildeInPath + "/Applications",
+                ("~" as NSString).expandingTildeInPath + "/Applications/Utilities",
             ]
             let fileManager = FileManager.default
             let workspace = NSWorkspace.shared
