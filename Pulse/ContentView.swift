@@ -128,20 +128,21 @@ struct ContentView: View {
                                 Image(nsImage: result.icon)
                                     .resizable()
                                     .aspectRatio(contentMode: .fit)
-                                    .frame(width: 24, height: 24)
+                                    .frame(width: 26, height: 26)  // Slightly larger icon
 
-                                Text(result.name)
-                                    .font(.system(size: 16))
+                                HighlightText(text: result.name, query: query)
+                                    .font(.system(size: 18, weight: .regular))  // Larger, cleaner font
                                     .foregroundColor(selectedIndex == index ? .white : .primary)
 
                                 Spacer()
                             }
-                            .padding(.vertical, 8)
-                            .padding(.horizontal, 10)
+                            .padding(.vertical, 10)  // More breathing room
+                            .padding(.horizontal, 12)
+                            .contentShape(Rectangle())  // Make entire row clickable
                             .background(
-                                selectedIndex == index ? Color.accentColor : Color.clear
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(selectedIndex == index ? Color.accentColor : Color.clear)
                             )
-                            .cornerRadius(6)
                             .onTapGesture {
                                 selectedIndex = index
                                 runSelectedCommand()
