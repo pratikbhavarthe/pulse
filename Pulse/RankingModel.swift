@@ -66,24 +66,66 @@ class RankingEngine {
     }
 
     func score(candidate: SearchResult, query: String) -> Double {
-        // 1. Base Score (Fuzzy Match)
-        // Simple boolean match logic currently returns 1.0 or 0.0,
-        // but we should ideally integrate a fuzzy score.
-        // For now, if it matches, base = 1.0
-        let baseScore = 1.0
+        let queryLower = query.lowercased()
+        let nameLower = candidate.name.lowercased()
 
-        // 2. Frequency Boost
-        var boost = 0.0
-        if let usage = usageStats[candidate.stableId] {
-            // Logarithmic scale prevents frequently used items from dominating excessively
-            boost += log(Double(usage.count + 1)) * 2.0
-
-            // Recency Boost (Decay)
-            // Example: Used within last hour = +2, last day = +1
-            let timeSince = Date().timeIntervalSince(usage.lastUsed)
-            if timeSince < 3600 { boost += 2.0 } else if timeSince < 86400 { boost += 1.0 }
+        // 1. Base String Similarity Score
+        var baseScore = 0.0
+        if nameLower == queryLower {
+            baseScore = 20.0  // Strong boost for exact name match
+        } else if nameLower.hasPrefix(queryLower) {
+            baseScore = 10.0  // Good boost for prefix match
+        } else {
+            baseScore = 1.0  // Basic match
         }
 
-        return baseScore + boost
+        // 2. Folder Type Multiplier (Folders are usually better targets for generalized queries)
+        var multiplier = 1.0
+        if candidate.isFolder {
+            multiplier *= 1.5
+        }
+
+        // 3. Path Depth Decay (Intelligence: Real system/work folders are closer to roots)
+        // We use an exponential decay: score / (1 + depth)
+        let components = candidate.path.components(separatedBy: "/")
+        // depth factor: 1.0 for root, decreasing as we go deeper
+        let depthFactor = 5.0 / (1.0 + Double(components.count))
+
+        // 4. User Environment Bias
+        var environmentBias = 1.0
+        let homeDir = NSHomeDirectory()
+        if candidate.path.hasPrefix(homeDir) {
+            environmentBias += 2.0
+
+            // Extra bias for shallow items in Home (e.g., Desktop, Projects)
+            if components.count <= 4 {
+                environmentBias += 3.0
+            }
+        }
+
+        // Intelligence: Penalize archives, backups, and secondary copies
+        let pathLower = candidate.path.lowercased()
+        if pathLower.contains("archive") || pathLower.contains("backup")
+            || pathLower.contains("snapshot")
+        {
+            environmentBias *= 0.1
+        }
+
+        // 5. Frequency & Recency (Learning from User Behavior)
+        var usageScore = 0.0
+        if let usage = usageStats[candidate.stableId] {
+            usageScore += log(Double(usage.count + 1)) * 5.0
+
+            let timeSince = Date().timeIntervalSince(usage.lastUsed)
+            if timeSince < 3600 {
+                usageScore += 10.0
+            }  // Heavy boost for immediate re-use
+            else if timeSince < 86400 {
+                usageScore += 5.0
+            }
+        }
+
+        // Final Aggregate Calculation
+        return (baseScore * multiplier * depthFactor * environmentBias) + usageScore
     }
 }

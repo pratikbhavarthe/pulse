@@ -19,13 +19,29 @@ class SearchOrchestrator: ObservableObject {
         // Listen to AppSearch updates
         AppSearch.shared.$apps
             .sink { [weak self] _ in
-                // Re-run search if query exists?
-                // For now, let next keystroke trigger it.
+                if let query = self?.lastQuery {
+                    self?.search(query: query)
+                }
+            }
+            .store(in: &cancellables)
+
+        // Listen to FileSearch updates
+        FileSearchManager.shared.$results
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self = self else { return }
+                // Only re-run search if we actually have a query
+                if !self.lastQuery.isEmpty {
+                    self.search(query: self.lastQuery)
+                }
             }
             .store(in: &cancellables)
     }
 
+    private var lastQuery: String = ""
+
     func search(query: String) {
+        lastQuery = query
         // Cancel previous pending search
         searchWorkItem?.cancel()
 
@@ -59,6 +75,24 @@ class SearchOrchestrator: ObservableObject {
             if !query.isEmpty {
                 let matches = apps.filter { $0.name.fuzzyMatch(query) }
                 newResults.append(contentsOf: matches)
+            }
+
+            // 4. Extensions
+            if !query.isEmpty {
+                let exts = ExtensionManager.shared.extensions
+                let matches = exts.filter { $0.name.fuzzyMatch(query) }
+                newResults.append(contentsOf: matches)
+            }
+
+            // 5. Files
+            if !query.isEmpty {
+                // Ensure query is started if needed
+                FileSearchManager.shared.search(queryStr: query)
+
+                // Get CURRENT results. The listener will trigger a re-search
+                // once the async Spotlight query finishes.
+                let files = FileSearchManager.shared.results
+                newResults.append(contentsOf: files)
             }
 
             // 4. Ranking

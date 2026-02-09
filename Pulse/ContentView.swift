@@ -31,8 +31,8 @@ struct PulseTextField: NSViewRepresentable {
     var onEnter: () -> Void
     var onEscape: () -> Void
 
-    func makeNSView(context: Context) -> NSTextField {
-        let textField = NSTextField()
+    func makeNSView(context: Context) -> PulseNativeTextField {
+        let textField = PulseNativeTextField()
         textField.delegate = context.coordinator
         textField.focusRingType = .none
         textField.isBordered = false
@@ -43,7 +43,7 @@ struct PulseTextField: NSViewRepresentable {
         return textField
     }
 
-    func updateNSView(_ nsView: NSTextField, context: Context) {
+    func updateNSView(_ nsView: PulseNativeTextField, context: Context) {
         if nsView.stringValue != text {
             nsView.stringValue = text
         }
@@ -82,6 +82,40 @@ struct PulseTextField: NSViewRepresentable {
                 return true
             }
             return false
+        }
+    }
+}
+
+class PulseNativeTextField: NSTextField {
+    private var observer: NSObjectProtocol?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+
+        if let existing = observer {
+            NotificationCenter.default.removeObserver(existing)
+        }
+
+        if let window = window {
+            observer = NotificationCenter.default.addObserver(
+                forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                guard let self = self else { return }
+                if self.window?.firstResponder != self.currentEditor() {
+                    self.window?.makeFirstResponder(self)
+                }
+            }
+
+            // Also grab focus immediately if window is already key
+            if window.isKeyWindow && window.firstResponder != self.currentEditor() {
+                window.makeFirstResponder(self)
+            }
+        }
+    }
+
+    deinit {
+        if let existing = observer {
+            NotificationCenter.default.removeObserver(existing)
         }
     }
 }
