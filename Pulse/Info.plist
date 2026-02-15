@@ -4,5 +4,11 @@
 <dict>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Pulse needs permission to control Finder to execute system commands like emptying trash.</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0-alpha.1</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
 </dict>
 </plist>

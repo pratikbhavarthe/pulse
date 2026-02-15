@@ -50,6 +50,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var launcherPanel: LauncherPanel!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Initialize background services
+        _ = ActiveAppDetector.shared
+
         let contentView = ContentView()
         let screenRect = NSScreen.main?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let width: CGFloat = 770  // Match ContentView
@@ -112,8 +115,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if launcherPanel.isVisible {
             launcherPanel.orderOut(nil)
         } else {
+            // Capture the previous app before showing Pulse
+            ActiveAppDetector.shared.capturePreviousApp()
+
             launcherPanel.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            NSRunningApplication.current.activate(options: .activateIgnoringOtherApps)
         }
     }
 }
