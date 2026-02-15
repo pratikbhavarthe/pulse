@@ -36,38 +36,6 @@ struct HighlightText: View {
     }
 }
 
-struct VisualEffectBlur: NSViewRepresentable {
-    var material: NSVisualEffectView.Material = .hudWindow
-    var blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
-    var state: NSVisualEffectView.State = .active
-    var cornerRadius: CGFloat = 0  // New parameter
-
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = material
-        view.blendingMode = blendingMode
-        view.state = state
-
-        // Critical for rounded corners on macOS
-        view.wantsLayer = true
-        view.layer?.cornerRadius = cornerRadius
-        view.layer?.masksToBounds = cornerRadius > 0
-
-        return view
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
-        nsView.material = material
-        nsView.blendingMode = blendingMode
-        nsView.state = state
-
-        if nsView.layer?.cornerRadius != cornerRadius {
-            nsView.layer?.cornerRadius = cornerRadius
-            nsView.layer?.masksToBounds = cornerRadius > 0
-        }
-    }
-}
-
 struct PulseTextField: NSViewRepresentable {
     @Binding var text: String
     var placeholder: String
@@ -168,7 +136,6 @@ class PulseNativeTextField: NSTextField {
         }
     }
 }
-
 struct ResultRow: View {
     let result: SearchResult
     let query: String
@@ -178,13 +145,18 @@ struct ResultRow: View {
     var body: some View {
         HStack(spacing: 12) {
             ZStack {
-                if let symbolName = result.symbolName {
+                if let customIcon = result.customIcon {
+                    // Display emoji symbol
+                    Text(customIcon)
+                        .font(.system(size: 24))
+                } else if let symbolName = result.symbolName {
                     Image(systemName: symbolName)
                         .font(.system(size: 15, weight: .medium))
                         .foregroundColor(isSelected ? .primary : .primary.opacity(0.9))
                 } else {
                     Image(nsImage: result.icon)
                         .resizable()
+                        .interpolation(.high)
                         .renderingMode(.original)
                         .aspectRatio(contentMode: .fit)
                         .frame(width: 20, height: 20)
@@ -349,8 +321,30 @@ struct ContentView: View {
     @State private var query: String = ""
     @State private var selectedIndex: Int = 0
     @State private var hoveredIndex: Int? = nil
+    @State private var showingConfirmation = false
+    @State private var showingEmojiPicker = false
+    @State private var showingQuicklinkEditor = false
+    @State private var quicklinkDraftQuery = ""
+    @State private var pendingAction: (() -> Void)? = nil
 
     var body: some View {
+        ZStack {
+            mainContent
+            confirmationOverlay
+            emojiPickerOverlay
+            quicklinkEditorOverlay
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: NSNotification.Name("triggerCreateQuicklink"))
+        ) { notification in
+            if let query = notification.object as? String {
+                quicklinkDraftQuery = query
+            }
+            showingQuicklinkEditor = true
+        }
+    }
+
+    private var mainContent: some View {
         VStack(spacing: 0) {
             // Search Input Area
             HStack(spacing: 12) {
@@ -440,7 +434,7 @@ struct ContentView: View {
                     .padding(.bottom, 6)
                     .onHover { _ in NSCursor.arrow.set() }
                 }
-                .onChange(of: selectedIndex) { newIndex in
+                .onChange(of: selectedIndex) { _, newIndex in
                     withAnimation(.interactiveSpring(response: 0.2, dampingFraction: 0.82)) {
                         proxy.scrollTo(newIndex, anchor: .center)
                     }
@@ -474,15 +468,84 @@ struct ContentView: View {
             NSApp.activate(ignoringOtherApps: true)
             orchestrator.search(query: "")
         }
-        .onChange(of: query) { newQuery in
+        .onChange(of: query) { _, newQuery in
             orchestrator.search(query: newQuery)
             selectedIndex = 0
+        }
+    }
+
+    @ViewBuilder
+    private var confirmationOverlay: some View {
+        if showingConfirmation {
+            ConfirmationPopup(
+                message: "Are you sure you want to permanently erase all items in the Trash?",
+                confirmText: "Empty Trash",
+                onConfirm: {
+                    print("DEBUG: onConfirm callback triggered")
+                    print("DEBUG: pendingAction is nil: \(pendingAction == nil)")
+                    pendingAction?()
+                    pendingAction = nil
+                    showingConfirmation = false
+                },
+                onCancel: {
+                    print("DEBUG: onCancel callback triggered")
+                    pendingAction = nil
+                    showingConfirmation = false
+                }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var emojiPickerOverlay: some View {
+        if showingEmojiPicker {
+            EmojiPickerView(onDismiss: {
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                    showingEmojiPicker = false
+                }
+            })
+            .transition(.opacity.combined(with: .scale(scale: 0.95)))
+        }
+    }
+
+    @ViewBuilder
+    private var quicklinkEditorOverlay: some View {
+        if showingQuicklinkEditor {
+            Color.black.opacity(0.4)
+                .edgesIgnoringSafeArea(.all)
+                .onTapGesture { showingQuicklinkEditor = false }
+
+            QuicklinkEditorView(
+                initialLink: quicklinkDraftQuery.isEmpty
+                    ? "" : "https://google.com/search?q={argument}"
+            )
+            .transition(.scale.combined(with: .opacity))
         }
     }
 
     private func runSelectedCommand() {
         guard selectedIndex < orchestrator.flattenedResults.count else { return }
         let selected = orchestrator.flattenedResults[selectedIndex]
+
+        // Check if this is Search Emoji & Symbols - open emoji picker
+        if selected.name == "Search Emoji & Symbols" {
+            ActiveAppDetector.shared.capturePreviousApp()
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                showingEmojiPicker = true
+            }
+            return
+        }
+
+        // Check if this is Empty Trash - show confirmation popup
+        if selected.name == "Empty Trash" {
+            pendingAction = {
+                RankingEngine.shared.recordExecution(stableId: selected.stableId)
+                selected.execute()
+                NotificationCenter.default.post(name: NSNotification.Name("hidePulse"), object: nil)
+            }
+            showingConfirmation = true
+            return
+        }
 
         // Record usage for Recents
         RankingEngine.shared.recordExecution(stableId: selected.stableId)

@@ -53,10 +53,12 @@ public enum ResultType {
     case app
     case system
     case calculator
+    case emoji
     case plugin
     case file
     case clipboard
     case snippet
+    case quicklink
 }
 
 public struct SearchResult: Command, Hashable {
@@ -66,9 +68,10 @@ public struct SearchResult: Command, Hashable {
     public let path: String
     public let icon: NSImage
     public let symbolName: String?
+    public let customIcon: String?  // For emoji symbols
     public let type: ResultType
     public let isFolder: Bool
-    public let subtitle: String?
+    public var subtitle: String?
     public let detailContent: String?
     public let action: (() -> Void)?
 
@@ -78,10 +81,12 @@ public struct SearchResult: Command, Hashable {
         case .app: return "Application"
         case .system: return "System"
         case .calculator: return "Calculator"
+        case .emoji: return "Emoji"
         case .plugin: return "Extension"
         case .file: return isFolder ? "Folder" : "File"
         case .clipboard: return "Clipboard"
         case .snippet: return "Snippet"
+        case .quicklink: return "Quicklink"
         }
     }
 
@@ -130,11 +135,16 @@ public struct SearchResult: Command, Hashable {
 
             // Hide the launcher via notification to avoid scope issues
             NotificationCenter.default.post(name: NSNotification.Name("hidePulse"), object: nil)
+        } else if type == .quicklink {
+            if let url = URL(string: path) {
+                NSWorkspace.shared.open(url)
+            }
         }
     }
 
     public init(
         name: String, path: String, icon: NSImage, symbolName: String? = nil,
+        customIcon: String? = nil,
         type: ResultType = .app,
         isFolder: Bool = false, subtitle: String? = nil, detailContent: String? = nil,
         stableId: String? = nil,
@@ -144,6 +154,7 @@ public struct SearchResult: Command, Hashable {
         self.path = path
         self.icon = icon
         self.symbolName = symbolName
+        self.customIcon = customIcon
         self.type = type
         self.isFolder = isFolder
         self.subtitle = subtitle
@@ -223,13 +234,22 @@ struct SystemCommand: Identifiable, Hashable {
     }
 
     static func runScript(_ source: String) {
+        print("DEBUG: runScript called with: \(source)")
         var error: NSDictionary?
         if let script = NSAppleScript(source: source) {
-            script.executeAndReturnError(&error)
+            let result = script.executeAndReturnError(&error)
+            if let error = error {
+                print("DEBUG: AppleScript error: \(error)")
+            } else {
+                print("DEBUG: AppleScript executed successfully, result: \(result)")
+            }
+        } else {
+            print("DEBUG: Failed to create NSAppleScript")
         }
     }
 
     static let all: [SystemCommand] = [
+        SystemCommand(name: "Search Emoji & Symbols", action: {}, iconName: "face.smiling"),
         SystemCommand(name: "Sleep", action: { runShell("pmset sleepnow") }, iconName: "moon.fill"),
         SystemCommand(
             name: "Restart", action: { runScript("tell application \"Finder\" to restart") },
@@ -242,16 +262,45 @@ struct SystemCommand: Identifiable, Hashable {
             iconName: "lock.fill"),
         SystemCommand(
             name: "Empty Trash",
-            action: { runScript("tell application \"Finder\" to empty trash") },
+            action: {
+                print("DEBUG: Empty Trash action executing...")
+                runScript("tell application \"Finder\" to empty trash")
+                print("DEBUG: Empty Trash action completed")
+            },
             iconName: "trash.fill"),
     ]
 
     var asSearchResult: SearchResult {
-        SearchResult(
+        var icon = NSImage(systemSymbolName: iconName, accessibilityDescription: nil) ?? NSImage()
+        var shouldUseCustomIcon = false
+
+        if name == "Search Emoji & Symbols" {
+            // Try explicit file path first (for development)
+            let devPath = "/Users/pratikbhavarthe/Developer/Pulse/Pulse/emoji_icon.png"
+            if FileManager.default.fileExists(atPath: devPath) {
+                if let img = NSImage(contentsOfFile: devPath) {
+                    icon = img
+                    shouldUseCustomIcon = true
+                }
+            } else if let bundleImage = NSImage(named: "emoji_icon") {
+                // Fallback to bundle/asset catalog
+                icon = bundleImage
+                shouldUseCustomIcon = true
+            }
+
+            if shouldUseCustomIcon {
+                // Resize to 64x64 (Retina @2x for 32pt display) to match "buttery smooth" requirement
+                // This prevents aliasing artifacts from downscaling 512px -> 20px
+                icon = icon.resized(to: NSSize(width: 64, height: 64)) ?? icon
+                icon.size = NSSize(width: 32, height: 32)  // Logical size 32pt
+            }
+        }
+
+        return SearchResult(
             name: name,
             path: "system",
-            icon: NSImage(systemSymbolName: iconName, accessibilityDescription: nil) ?? NSImage(),
-            symbolName: iconName,
+            icon: icon,
+            symbolName: shouldUseCustomIcon ? nil : iconName,  // Nil out symbol name to force NSImage rendering
             type: .system,
             isFolder: false,
             subtitle: "System Command",
@@ -432,6 +481,95 @@ class ExtensionManager: ObservableObject {
     }
 }
 
+// MARK: - Quicklinks
+
+struct Quicklink: Codable, Identifiable {
+    var id: UUID
+    var name: String
+    var link: String
+    var icon: String
+    var openWith: String?
+}
+
+class QuicklinkManager: ObservableObject {
+    static let shared = QuicklinkManager()
+    @Published var quicklinks: [Quicklink] = []
+    private let storageURL: URL
+
+    private init() {
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(
+                "Pulse")
+        try? FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+        self.storageURL = appSupport.appendingPathComponent("quicklinks.json")
+        loadQuicklinks()
+
+        // Add default quicklinks if empty
+        if quicklinks.isEmpty {
+            addDefaultQuicklinks()
+        }
+    }
+
+    func loadQuicklinks() {
+        if let data = try? Data(contentsOf: storageURL),
+            let decoded = try? JSONDecoder().decode([Quicklink].self, from: data)
+        {
+            quicklinks = decoded
+        }
+    }
+
+    func saveQuicklinks() {
+        if let data = try? JSONEncoder().encode(quicklinks) {
+            try? data.write(to: storageURL)
+        }
+    }
+
+    func addQuicklink(name: String, link: String, icon: String = "link", openWith: String? = nil) {
+        let newLink = Quicklink(
+            id: UUID(), name: name, link: link, icon: icon, openWith: openWith)
+        quicklinks.append(newLink)
+        saveQuicklinks()
+    }
+
+    func deleteQuicklink(id: UUID) {
+        quicklinks.removeAll { $0.id == id }
+        saveQuicklinks()
+    }
+
+    private func addDefaultQuicklinks() {
+        addQuicklink(
+            name: "Search Google", link: "https://www.google.com/search?q={argument}",
+            icon: "globe")
+        addQuicklink(
+            name: "Search GitHub", link: "https://github.com/search?q={argument}",
+            icon: "chevron.left.forwardslash.chevron.right")
+        addQuicklink(
+            name: "Open Downloads", link: "file://~/Downloads", icon: "arrow.down.circle")
+    }
+
+    func resolve(link: String, query: String) -> String {
+        var resolved = link
+
+        // Replace {argument}
+        let encodedQuery =
+            query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+            ?? query
+        resolved = resolved.replacingOccurrences(of: "{argument}", with: encodedQuery)
+
+        // Replace {clipboard}
+        if resolved.contains("{clipboard}") {
+            let clipboardContent = NSPasteboard.general.string(forType: .string) ?? ""
+            let encodedClipboard =
+                clipboardContent.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+                ?? ""
+            resolved = resolved.replacingOccurrences(
+                of: "{clipboard}", with: encodedClipboard)
+        }
+
+        return resolved
+    }
+}
+
 class FileSearchManager: NSObject, ObservableObject {
     static let shared = FileSearchManager()
     @Published var results: [SearchResult] = []
@@ -483,8 +621,8 @@ struct CommandUsage: Codable {
     var lastUsed: Date
 }
 
-class RankingEngine {
-    static let shared = RankingEngine()
+public class RankingEngine {
+    public static let shared = RankingEngine()
     private var usageStats: [String: CommandUsage] = [:]
     private var statsURL: URL?
 
@@ -502,7 +640,7 @@ class RankingEngine {
         }
     }
 
-    func recordExecution(stableId: String) {
+    public func recordExecution(stableId: String) {
         var usage = usageStats[stableId] ?? CommandUsage(id: stableId, count: 0, lastUsed: Date())
         usage.count += 1
         usage.lastUsed = Date()
@@ -527,11 +665,18 @@ class RankingEngine {
         return s
     }
 
-    func getRecents(limit: Int = 5) -> [String] {
+    public func getRecents(limit: Int = 5) -> [String] {
         return usageStats.values
             .sorted { $0.lastUsed > $1.lastUsed }
             .prefix(limit)
             .map { $0.id }
+    }
+
+    public func reset() {
+        usageStats = [:]
+        if let url = statsURL {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 }
 
@@ -559,6 +704,10 @@ class SearchOrchestrator: ObservableObject {
             self?.search(query: self?.lastQuery ?? "")
         }
         .store(in: &cancellables)
+        QuicklinkManager.shared.$quicklinks.sink { [weak self] _ in
+            self?.search(query: self?.lastQuery ?? "")
+        }
+        .store(in: &cancellables)
     }
 
     func search(query: String) {
@@ -573,6 +722,7 @@ class SearchOrchestrator: ObservableObject {
                 "Suggestions": [],
                 "Applications": [],
                 "System": [],
+                "Emojis": [],
                 "Clipboard": [],
             ]
 
@@ -588,16 +738,72 @@ class SearchOrchestrator: ObservableObject {
 
             // 2. System Commands
             let sys = SystemCommand.all
-            let systemMatches = query.isEmpty ? sys : sys.filter { $0.name.fuzzyMatch(query) }
-            categorized["System"] = systemMatches.map { $0.asSearchResult }
+            var systemMatches = query.isEmpty ? sys : sys.filter { $0.name.fuzzyMatch(query) }
 
-            // 3. Apps
+            // Check for emoji matches to conditionally show "Search Emoji & Symbols"
+            if !query.isEmpty {
+                let emojiMatches = EmojiData.shared.search(query: query)
+                if !emojiMatches.isEmpty {
+                    // Find the command if not already in results
+                    if !systemMatches.contains(where: { $0.name == "Search Emoji & Symbols" }) {
+                        if let cmd = sys.first(where: { $0.name == "Search Emoji & Symbols" }) {
+                            systemMatches.insert(cmd, at: 0)
+                        }
+                    } else {
+                        // Ensure it's at the top if it was already matched
+                        if let idx = systemMatches.firstIndex(where: {
+                            $0.name == "Search Emoji & Symbols"
+                        }) {
+                            let cmd = systemMatches.remove(at: idx)
+                            systemMatches.insert(cmd, at: 0)
+                        }
+                    }
+                }
+            }
+
+            categorized["System"] = systemMatches.map { cmd in
+                var result = cmd.asSearchResult
+                // Enhance subtitle if emoji matches found
+                if cmd.name == "Search Emoji & Symbols" && !query.isEmpty {
+                    let count = EmojiData.shared.search(query: query).count
+                    if count > 0 {
+                        result.subtitle = "Found \(count) matching emojis"
+                        // Boost score implicitly by order, or we could trick the ranker
+                    }
+                }
+                return result
+            }
+
+            // 3. Emojis - REMOVED (Handled by dedicated picker command)
+            // let emojiSource = EmojiSearchSource()
+            // let emojiResults = emojiSource.search(query: query)
+            // categorized["Emojis"] = emojiResults
+
+            // 4. Apps
             let apps = AppSearch.shared.apps
             if !query.isEmpty {
                 categorized["Applications"] = apps.filter { $0.name.fuzzyMatch(query) }
             }
 
-            // 4. Clipboard
+            // 5. Quicklinks
+            let quicklinks = QuicklinkManager.shared.quicklinks
+            if !query.isEmpty {
+                categorized["Quicklinks"] = quicklinks.filter { $0.name.fuzzyMatch(query) }.map {
+                    ql in
+                    SearchResult(
+                        name: ql.name,
+                        path: QuicklinkManager.shared.resolve(link: ql.link, query: query),
+                        icon: NSImage(systemSymbolName: ql.icon, accessibilityDescription: nil)
+                            ?? NSImage(),
+                        symbolName: ql.icon,
+                        type: .quicklink,
+                        subtitle: ql.link,
+                        stableId: "ql_\(ql.id)"
+                    )
+                }
+            }
+
+            // 6. Clipboard
             let history = ClipboardManager.shared.history
             if query.isEmpty {
                 categorized["Clipboard"] = history.prefix(5).map {
@@ -616,7 +822,7 @@ class SearchOrchestrator: ObservableObject {
                 }
             }
 
-            // 5. Recents & Scoring
+            // 6. Recents & Scoring
             let recentIds = RankingEngine.shared.getRecents(limit: 5)
             var allCandidates = Array(categorized.values.joined())
 
@@ -637,8 +843,11 @@ class SearchOrchestrator: ObservableObject {
                 }
             }
 
-            // 6. Final Sections
-            let sectionOrder = ["Recents", "Suggestions", "Applications", "System", "Clipboard"]
+            // 7. Final Sections
+            let sectionOrder = [
+                "Recents", "Suggestions", "Emojis", "Applications", "Quicklinks", "System",
+                "Clipboard",
+            ]
             var finalSections: [SearchResultSection] = []
             var finalFlattened: [SearchResult] = []
 
@@ -654,6 +863,47 @@ class SearchOrchestrator: ObservableObject {
                 }
             }
 
+            // 8. Fallback Commands
+            if finalFlattened.isEmpty && !query.isEmpty {
+                var fallbackResults: [SearchResult] = []
+
+                // Google Search
+                fallbackResults.append(
+                    SearchResult(
+                        name: "Search Google for '\(query)'",
+                        path:
+                            "https://www.google.com/search?q=\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query)",
+                        icon: NSImage(systemSymbolName: "globe", accessibilityDescription: nil)
+                            ?? NSImage(),
+                        symbolName: "globe",
+                        type: .quicklink,
+                        subtitle: "Fallback Command",
+                        stableId: "fallback_google"
+                    ))
+
+                // Create Quicklink
+                fallbackResults.append(
+                    SearchResult(
+                        name: "Create Quicklink for '\(query)'",
+                        path: "create_quicklink",
+                        icon: NSImage(
+                            systemSymbolName: "link.badge.plus", accessibilityDescription: nil)
+                            ?? NSImage(),
+                        symbolName: "link.badge.plus",
+                        type: .system,
+                        subtitle: "Create a new shortcut",
+                        stableId: "fallback_create_quicklink",
+                        action: {
+                            NotificationCenter.default.post(
+                                name: NSNotification.Name("triggerCreateQuicklink"), object: query)
+                        }
+                    ))
+
+                finalSections.append(
+                    SearchResultSection(title: "Fallback Commands", results: fallbackResults))
+                finalFlattened.append(contentsOf: fallbackResults)
+            }
+
             DispatchQueue.main.async {
                 self.sections = finalSections
                 self.flattenedResults = finalFlattened
@@ -666,5 +916,33 @@ class SearchOrchestrator: ObservableObject {
         } else {
             DispatchQueue.global(qos: .userInitiated).async(execute: workItem)
         }
+    }
+}
+
+// MARK: - NSImage Extension for High Quality Resizing
+extension NSImage {
+    func resized(to newSize: NSSize) -> NSImage? {
+        if let bitmapRep = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: Int(newSize.width), pixelsHigh: Int(newSize.height),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .calibratedRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ) {
+            bitmapRep.size = newSize
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmapRep)
+            NSGraphicsContext.current?.imageInterpolation = .high  // Critical for smoothness
+            draw(
+                in: NSRect(x: 0, y: 0, width: newSize.width, height: newSize.height),
+                from: NSRect(x: 0, y: 0, width: size.width, height: size.height),
+                operation: .copy,
+                fraction: 1.0
+            )
+            NSGraphicsContext.restoreGraphicsState()
+
+            let resizedImage = NSImage(size: newSize)
+            resizedImage.addRepresentation(bitmapRep)
+            return resizedImage
+        }
+        return nil
     }
 }

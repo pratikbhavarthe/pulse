@@ -40,7 +40,7 @@ struct CustomScrollView<Content: View>: View {
                 .onAppear {
                     visibleHeight = outerGeo.size.height
                 }
-                .onChange(of: outerGeo.size.height) { newHeight in
+                .onChange(of: outerGeo.size.height) { _, newHeight in
                     visibleHeight = newHeight
                 }
 
@@ -81,7 +81,7 @@ struct CustomScrollView<Content: View>: View {
         // Clamp progress
         let clampedProgress = min(max(progress, 0), 1)
 
-        return clampedProgress * maxIndicatorOffset 
+        return clampedProgress * maxIndicatorOffset
     }
 }
 
